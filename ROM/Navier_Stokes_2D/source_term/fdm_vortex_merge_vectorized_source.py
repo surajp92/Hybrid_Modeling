@@ -21,9 +21,12 @@ import matplotlib.pyplot as plt
 import time as tm
 import matplotlib.ticker as ticker
 
+import os
+
 font = {'family' : 'Times New Roman',
         'size'   : 14}    
 plt.rc('font', **font)
+
 #%%
 # fast poisson solver using second-order central difference scheme
 def fps(nx, ny, dx, dy, f):
@@ -89,7 +92,7 @@ def bc(nx,ny,u):
 # compute rhs using arakawa scheme
 # computed at all physical domain points (1:nx+1,1:ny+1; all boundary points included)
 # no ghost points
-def rhs(nx,ny,dx,dy,re,w,s):
+def rhs(nx,ny,dx,dy,re,w,s,x,y,ts):
     aa = 1.0/(dx*dx)
     bb = 1.0/(dy*dy)
     gg = 1.0/(4.0*dx*dy)
@@ -115,8 +118,11 @@ def rhs(nx,ny,dx,dy,re,w,s):
     
     lap = aa*(w[2:nx+3,1:ny+2]-2.0*w[1:nx+2,1:ny+2]+w[0:nx+1,1:ny+2]) \
         + bb*(w[1:nx+2,2:ny+3]-2.0*w[1:nx+2,1:ny+2]+w[1:nx+2,0:ny+1])
-        
-    f[1:nx+2,1:ny+2] = -jac + lap/re 
+      
+    source = 0.01*np.sin(np.pi*x)*np.cos(np.pi*y)*np.exp(-ts/(re))
+    #source = 0.0
+    
+    f[1:nx+2,1:ny+2] = -jac + lap/re +source
                         
     return f
 
@@ -130,8 +136,7 @@ def vm_ic(nx,ny,x,y):
     xc2 = np.pi+np.pi/4.0
     yc2 = np.pi
     
-    w[1:nx+2, 1:ny+2] = np.exp(-sigma*((x[0:nx+1, 0:ny+1]-xc1)**2 + (y[0:nx+1, 0:ny+1]-yc1)**2)) \
-                        + np.exp(-sigma*((x[0:nx+1, 0:ny+1]-xc2)**2 + (y[0:nx+1, 0:ny+1]-yc2)**2))
+    w[1:nx+2, 1:ny+2] = np.exp(-sigma*((x[0:nx+1, 0:ny+1]-xc1)**2 + (y[0:nx+1, 0:ny+1]-yc1)**2)) + np.exp(-sigma*((x[0:nx+1, 0:ny+1]-xc2)**2 + (y[0:nx+1, 0:ny+1]-yc2)**2))
     
     w = bc(nx,ny,w)
 
@@ -204,9 +209,12 @@ w = np.copy(w0)
 s = fps(nx, ny, dx, dy, -w)
 s = bc(nx,ny,s)
 
-filename = "./snapshots/Re_1000/w/w_0.csv"
+os.makedirs("./snapshots/Re_" + str(int(re))+"/w")
+os.makedirs("./snapshots/Re_" + str(int(re))+"/s")
+
+filename = "./snapshots/Re_" + str(int(re))+"/w/w_0.csv"
 np.savetxt(filename, w, delimiter=",")
-filename = "./snapshots/Re_1000/s/s_0.csv"
+filename = "./snapshots/Re_" + str(int(re))+"/s/s_0.csv"
 np.savetxt(filename, s, delimiter=",")
 
 #%%
@@ -216,7 +224,7 @@ bb = 2.0/3.0
 clock_time_init = tm.time()
 for k in range(1,nt+1):
     time = time + dt
-    r = rhs(nx,ny,dx,dy,re,w,s)
+    r = rhs(nx,ny,dx,dy,re,w,s,x,y,time)
     
     #stage-1
     t[1:nx+2,1:ny+2] = w[1:nx+2,1:ny+2] + dt*r[1:nx+2,1:ny+2]
@@ -226,7 +234,7 @@ for k in range(1,nt+1):
     s = fps(nx, ny, dx, dy, -t)
     s = bc(nx,ny,s)
     
-    r = rhs(nx,ny,dx,dy,re,t,s)
+    r = rhs(nx,ny,dx,dy,re,t,s,x,y,time)
     
     #stage-2
     t[1:nx+2,1:ny+2] = 0.75*w[1:nx+2,1:ny+2] + 0.25*t[1:nx+2,1:ny+2] + 0.25*dt*r[1:nx+2,1:ny+2]
@@ -236,7 +244,7 @@ for k in range(1,nt+1):
     s = fps(nx, ny, dx, dy, -t)
     s = bc(nx,ny,s)
     
-    r = rhs(nx,ny,dx,dy,re,t,s)
+    r = rhs(nx,ny,dx,dy,re,t,s,x,y,time)
     
     #stage-3
     w[1:nx+2,1:ny+2] = aa*w[1:nx+2,1:ny+2] + bb*t[1:nx+2,1:ny+2] + bb*dt*r[1:nx+2,1:ny+2]
@@ -247,9 +255,9 @@ for k in range(1,nt+1):
     s = bc(nx,ny,s)
     
     if (k%freq == 0):
-        filename = "./snapshots/Re_1000/w/w_"+str(int(k/freq))+".csv"
+        filename = "./snapshots/Re_" + str(int(re))+"/w/w_"+str(int(k/freq))+".csv"
         np.savetxt(filename, w, delimiter=",")
-        filename = "./snapshots/Re_1000/s/s_"+str(int(k/freq))+".csv"
+        filename = "./snapshots/Re_" + str(int(re))+"/s/s_"+str(int(k/freq))+".csv"
         np.savetxt(filename, s, delimiter=",")
         #u,v = compute_velocity(nx,ny,dx,dy,s)
         #compute_stress(nx,ny,nxc,nyc,dxc,dyc,u,v,k,freq)
@@ -279,5 +287,5 @@ cbar_ax = fig.add_axes([0.22, -0.05, 0.6, 0.04])
 fig.colorbar(cs, cax=cbar_ax, orientation='horizontal')
 plt.show()
 
-fig.savefig("./snapshots/Re_1000/field_fdm.eps", bbox_inches = 'tight')
+fig.savefig("./snapshots/Re_" + str(int(re))+"/field_fdm.eps", bbox_inches = 'tight')
    

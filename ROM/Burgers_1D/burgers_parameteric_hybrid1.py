@@ -29,6 +29,7 @@ from sklearn.externals import joblib
 from sklearn.model_selection import train_test_split
 
 from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 font = {'family' : 'Times New Roman',
         'size'   : 14}    
@@ -126,7 +127,6 @@ def uexact(x, t, nu):  #Exact Solution [Sirisup]
     uexact = (x/(t+1.0))/(1.0+np.sqrt((t+1.0)/t0)*np.exp(x*x/(4.0*nu*(t+1.0))))
     return uexact
 
-
 def rhs(nr, b_l, b_nl, a): # Right Handside of Galerkin Projection
     r2, r3, r = [np.zeros(nr) for _ in range(3)]
     
@@ -204,9 +204,11 @@ def plot_3d_surface(x,t,field):
     
     X, Y = np.meshgrid(t, x)
     
-    surf = ax.plot_surface(Y, X, field, cmap=plt.cm.viridis,
+    surf = ax.plot_surface(Y, X, field, cmap='coolwarm',
                            linewidth=1, antialiased=False,rstride=1,
                             cstride=1)
+    surf.set_edgecolors(surf.to_rgba(surf._A))
+    surf.set_facecolors("white")
     
     fig.colorbar(surf, shrink=0.5, aspect=5)
     
@@ -220,7 +222,7 @@ def plot_3d_surface(x,t,field):
 nx =  1024  #spatial grid number
 nc = 4     #number of control parameters (nu)
 ns = 100    #number of snapshot per each Parameter 
-nr = 8      #number of modes
+nr = 12      #number of modes
 Re_start = 100.0
 Re_final = 1000.0
 Re  = np.linspace(Re_start, Re_final, nc) #control Reynolds
@@ -229,6 +231,10 @@ lx = 1.0
 dx = lx/nx
 tm = 1.5
 dt = tm/ns
+
+noise = 0.3
+
+ReTest = 500
 
 #%% Data generation for training
 x = np.linspace(0, lx, nx+1)
@@ -244,7 +250,8 @@ for p in range(0,nc):
         for i in range(nx+1):
             x[i]=dx*i
             um[i,n,p]=uexact(x[i],t[n],nu[p]) #snapshots from unperturbed solution
-            up[i,n,p]=0.1*um[i,n,p] #perturbation (unknown physics)
+            #up[i,n,p]=0.1*um[i,n,p] #perturbation (unknown physics)
+            up[i,n,p]=noise*um[i,n,p]
             #up[i,n,p]=0.1*np.sin(np.pi*x[i])*np.exp(nu[p]*t[n])/(2+np.cos(np.pi*x[i])*np.exp(nu[p]*t[n]))
             #up[i,n,p]= 0.1*(np.sin(np.pi*x[i]))*t[n]**2*x[i]
             #up[i,n,p]= 0.1*(np.sin(np.pi*x[i]))*np.exp(x[i]**2*t[n])
@@ -355,11 +362,11 @@ for p in range(nc):
 def plot_data(t,at,aGP,atm):
     fig, ax = plt.subplots(nrows=4,ncols=2,figsize=(12,8))
     ax = ax.flat
-    nrs = at.shape[1]
+    nrs = 8
     
     for i in range(nrs):
         ax[i].plot(t,at[:,i],'k',label=r'True Values')
-        ax[i].plot(t,aGP[:,i],'b--',label=r'Exact Values')
+        #ax[i].plot(t,aGP[:,i],'b--',label=r'Exact Values')
         ax[i].plot(t,atm[:,i],'r-.',label=r'True Values')
         ax[i].set_xlabel(r'$t$',fontsize=14)
         ax[i].set_ylabel(r'$a_{'+str(i+1) +'}(t)$',fontsize=14)    
@@ -370,7 +377,7 @@ def plot_data(t,at,aGP,atm):
     line_labels = ["True","Standard GP", "Modified GP"]#, "ML-Train", "ML-Test"]
     plt.figlegend( line_labels,  loc = 'lower center', borderaxespad=0.0, ncol=3, labelspacing=0.)
     plt.show()
-    fig.savefig('modes_gp.pdf')
+    fig.savefig('modes_gp1.pdf')
 
 plot_data(t,at[:,:,-1],aGP[:,:,-1],aGPm[:,:,-1])        
 
@@ -489,15 +496,16 @@ t = np.linspace(0, tm, ns+1)
 uTest = np.zeros((nx+1, ns+1))
 upTest = np.zeros((nx+1, ns+1))
 uoTest = np.zeros((nx+1, ns+1))
-ReTest = 5000
 nuTest = 1/ReTest
 for n in range(ns+1):
    t[n] = dt*n
    for i in range(nx+1):
        x[i]=dx*i
        uTest[i,n]=uexact(x[i],t[n],nuTest) #snapshots from exact solution
-       upTest[i,n]=0.1*uTest[i,n]
+       upTest[i,n]=noise*uTest[i,n]
        uoTest[i,n] = uTest[i,n] + upTest[i,n]
+
+nr = 24
 
 #% POD basis computation     
 print('Computing testing POD basis...')
@@ -507,10 +515,18 @@ PHItrue, Ltrue, RICtrue  = POD(uoTest, nr)
 print('Computing testing POD coefficients...')
 aTrue = PODproj(uoTest,PHItrue)
 
+print('Reconstructing with true coefficients for test Re')
+u_true = PODrec(aTrue,PHItrue)
+
+u_fom = uoTest
+
 #%% Basis Interpolation
 pref = 2 #Reference case in [0:nRe]
 PHItest = GrassInt(PHI,pref,nu,nuTest)
 aTest = PODproj(uoTest,PHItest)
+
+print('Reconstructing with true coefficients for test Re')
+u_test = PODrec(aTest,PHItest)
 
 #%%
 b_l = np.zeros((nr,nr))
@@ -548,23 +564,26 @@ for k in range(3,ns+1):
     temp= (23/12) * r1 - (16/12) * r2 + (5/12) * r3
     aGPtest[k,:] = aGPtest[k-1,:] + dt*temp 
 
+print('Reconstructing with GP coefficients for test Re')
+u_gp = PODrec(aGPtest,PHItest)
+
 #%% modified
-aGPmtest = np.zeros((ns+1,nr))
-
-aGPmtest[0,:] = aTest[0,:nr]
-aGPmtest[1,:] = aTest[1,:nr]
-aGPmtest[2,:] = aTest[2,:nr]
-
-for k in range(3,ns+1):
-    r1 = rhs(nr, b_l[:,:], b_nl[:,:,:], aTest[k-1,:])
-    r2 = rhs(nr, b_l[:,:], b_nl[:,:,:], aTest[k-2,:])
-    r3 = rhs(nr, b_l[:,:], b_nl[:,:,:], aTest[k-3,:])
-    temp= (23/12) * r1 - (16/12) * r2 + (5/12) * r3
-    aGPmtest[k,:] = aTest[k-1,:] + dt*temp 
+#aGPmtest = np.zeros((ns+1,nr))
+#
+#aGPmtest[0,:] = aTest[0,:nr]
+#aGPmtest[1,:] = aTest[1,:nr]
+#aGPmtest[2,:] = aTest[2,:nr]
+#
+#for k in range(3,ns+1):
+#    r1 = rhs(nr, b_l[:,:], b_nl[:,:,:], aTest[k-1,:])
+#    r2 = rhs(nr, b_l[:,:], b_nl[:,:,:], aTest[k-2,:])
+#    r3 = rhs(nr, b_l[:,:], b_nl[:,:,:], aTest[k-3,:])
+#    temp= (23/12) * r1 - (16/12) * r2 + (5/12) * r3
+#    aGPmtest[k,:] = aGPmtest[k-1,:] + dt*temp 
         
 #%% plot basis
-def plot_data(x,phiTrue,phiTest,phi):
-    fig, ax = plt.subplots(nrows=5,ncols=2,figsize=(12,8))
+def plot_data_basis(x,phiTrue,phiTest,phi):
+    fig, ax = plt.subplots(nrows=4,ncols=2,figsize=(12,8))
     ax = ax.flat
     nrs = phiTrue.shape[1]
     
@@ -583,7 +602,7 @@ def plot_data(x,phiTrue,phiTest,phi):
     plt.show()
     fig.savefig('grasman.pdf')
 
-plot_data(x,PHItrue,PHItest,PHI[:,:,1]) 
+#plot_data_basis(x,PHItrue,PHItest,PHI[:,:,1]) 
 
 #%% LSTM [Fully Nonintrusive]
 # testing
@@ -626,34 +645,28 @@ for i in range(lookback,ns+1):
             
     xtest[0,lookback-1,:] = aGPmlc[i,:] 
 
-   
-#%%
-def plot_data(t,aTrue,aGPtest,aGPmlc):
-    fig, ax = plt.subplots(nrows=4,ncols=2,figsize=(12,8))
-    ax = ax.flat
-    nrs = aTrue.shape[1]
-    
-    for i in range(nrs):
-        ax[i].plot(t,aTrue[:,i],'k',label=r'True Values')
-        ax[i].plot(t,aGPtest[:,i],'b--',label=r'Exact Values')
-        ax[i].plot(t,aGPmlc[:,i],'m-.',label=r'Exact Values')
-        ax[i].set_xlabel(r'$t$',fontsize=14)
-        ax[i].set_ylabel(r'$a_{'+str(i+1) +'}(t)$',fontsize=14)    
-        ax[i].set_xlim([0,1.50])
-        ax[i].set_xticks(np.arange(min(t), max(t)+0.5, 0.5))
-        
-    fig.tight_layout()
-    fig.subplots_adjust(bottom=0.12)
-    
-    line_labels = ["True","Standard GP","GP-ML-Corrected"]#, "ML-Train", "ML-Test"]
-    plt.figlegend( line_labels,  loc = 'lower center', borderaxespad=0.0, ncol=5, labelspacing=0.)
-    plt.show()
-    fig.savefig('hybrid_3000.pdf')
-
-plot_data(t,aTest,aGPtest,aGPmlc) 
+print('Reconstructing with GP coefficients for test Re')
+u_ml = PODrec(aGPmlc,PHItest)
 
 #%%
-def plot_data(t,at,aTest,filename):
+modal_coeffs = np.hstack((aTest,aGPtest,aGPmlc))
+field = np.zeros((4,u_fom.shape[0],u_fom.shape[1]))
+field[0] = u_fom
+field[1] = u_test
+field[2] = u_gp
+field[3] = u_ml
+
+filename = "./plotting/h11_modes_"+str(int(ReTest))+".csv"
+np.savetxt(filename, modal_coeffs, delimiter=",")
+    
+with open("./plotting/h11_field_"+str(int(ReTest))+".csv", 'w') as outfile:
+    outfile.write('# Array shape: {0}\n'.format(field.shape))
+    for data_slice in field:
+        np.savetxt(outfile, data_slice, delimiter=",")
+        outfile.write('# New slice\n')
+
+#%%
+def plot_data_allmodes(t,at,aTest,filename):
     fig, ax = plt.subplots(nrows=4,ncols=2,figsize=(12,8))
     ax = ax.flat
     nrs = at.shape[1]
@@ -671,9 +684,9 @@ def plot_data(t,at,aTest,filename):
     fig.tight_layout()
     
     fig.subplots_adjust(bottom=0.1)
-    line_labels = ["True","Standard GP","Modified GP"]#, "ML-Train", "ML-Test"]
-    plt.figlegend( line_labels,  loc = 'lower center', borderaxespad=0.0, ncol=3, labelspacing=0.)
+    line_labels = ["Re=200","Re=400","Re=600","Re=800","Test"]#, "ML-Train", "ML-Test"]
+    plt.figlegend( line_labels,  loc = 'lower center', borderaxespad=0.0, ncol=5, labelspacing=0.)
     plt.show()
     fig.savefig(filename)
 
-plot_data(t,at[:,:],aTrue,'modes_1d.pdf')#,aGP1[-1,:,:])    
+#plot_data_allmodes(t,at[:,:],aTrue,'modes_1d.pdf')#,aGP1[-1,:,:])    
